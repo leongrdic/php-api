@@ -15,12 +15,6 @@
     "leongrdic/entity": "@dev",
     "leongrdic/exception": "^1.0.0"
   },
-  "repositories": [
-    {
-      "type": "path",
-      "url": "../php-entity"
-    }
-  ],
   "autoload": {
     "psr-4": {
       "Le\\": "src/"
