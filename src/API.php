@@ -4,8 +4,7 @@
 final class API {
 	private function __construct() {}
 
-	private static $resources;
-	public static $session;
+	public static $resources = [], $session = null;
 
 	const HTTP_OK = 200;
 	const HTTP_NO_CONTENT = 204;
