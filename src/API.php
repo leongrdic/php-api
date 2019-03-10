@@ -1,16 +1,12 @@
-<?php
+<?php namespace Le;
 // php-api by Leon, MIT License
 
-namespace Le;
+final class API {
+	private function __construct() {}
 
-class API {
-	public static $resources, $session, $options = [ 'list_limit' => 100 ];
-	
-	const ACCESS_DENY = 0;
-	const ACCESS_GRANT = 100;
-	const ACCESS_PROTECTED = 200;
-	const ACCESS_PRIVATE = 300;
-	
+	private static $resources;
+	public static $session;
+
 	const HTTP_OK = 200;
 	const HTTP_NO_CONTENT = 204;
 	const HTTP_MULTI = 207;
@@ -20,140 +16,154 @@ class API {
 	const HTTP_NOT_FOUND = 404;
 	const HTTP_SERVER_ERROR = 500;
 	const HTTP_NOT_IMPLEMENTED = 501;
-	
+
 	public static function init($resources, $session = null){
 		self::$session = $session;
 		self::$resources = $resources;
 	}
-	
-	public static function handle($method, $resource, $id, $args, $data){
-		
-		if(!isset(self::$resources[$resource])) return self::error(self::HTTP_NOT_FOUND, 'resource not found');
-		$meta = self::$resources[$resource];
-		
-		if(ctype_alpha($id) || strpos($id, '_') !== false){ // calling an action instead of id, works for all methods
-			$action = 'api_' . strtolower($method) . '_' . $id;
-			
-			if(!method_exists($meta['object'], $action)) return self::error(HTTP_NOT_IMPLEMENTED, 'unknown action');
-			
-			$params = [
-				'session' => self::$session,
-				'args' => $args,
+
+	public static function handle($method, $path, $query = [], $data = []){
+		try {
+			if(!isset($path[0])) throw new APIException(API::HTTP_NOT_FOUND, 'resource not found');
+			if(!isset($path[1])) throw new APIException(API::HTTP_NOT_IMPLEMENTED, 'unknown action');
+
+			if(!isset(self::$resources[$path[0]]))
+				throw new APIException(API::HTTP_NOT_FOUND, 'resource not found');
+
+			$class = self::$resources[$path[0]];
+			$function = strtolower($method) . '_' . $path[1];
+
+			if(!method_exists($class, $function))
+				throw new APIException(API::HTTP_NOT_IMPLEMENTED, 'unknown action');
+
+			array_shift($path); array_shift($path);
+
+			$response = call_user_func([ $class, $function ], [
+				'path' => $path,
+				'query' => $query,
 				'data' => $data
-			];
-			
-			return call_user_func([$meta['object'], $action], $params);
-		}else if(empty($id) && $method === 'GET'){ // calling without id, works only for GET method - list
-		
-			if(!method_exists($meta['object'], $action)) return self::error(HTTP_NOT_IMPLEMENTED, 'listing unavailable at the moment');
-			
-		}else if(!empty($id)){ // calling for one or more ids, works for GET and POST
-			if($method === 'GET'){
-				
-				if(strpos($id, ',') !== false){ // getting multiple objects
-					
-					$ids = explode(',', $id);
-					
-					$responses = [];
-					foreach($ids as $val){
-						array_push($responses, self::handle($method, $resource, $val, $args, $data));
-					}
-					
-					return self::response(self::HTTP_MULTI, $responses);
-					
-				}else{ // getting a single object
-					if(strpos($id, ':') !== false){
-						$hash = explode(':', $id);
-						$id = $hash[0];
-						$hash = isset($hash[1]) ? $hash[1] : null;
-					}
-					
-					$access = $meta['object']::api_access($id, self::$session);
-					if($access <= self::ACCESS_DENY) return self::error(self::HTTP_FORBIDDEN, 'access denied to this object', null, $id);
-					
-					if(!isset($meta['cache'])) $meta['cache'] = 0;
-					
-					if(isset($hash)){
-						$object_hash = $meta['object']::hash($id);
-						if($hash === $object_hash) return self::response(self::HTTP_NOT_MODIFIED, null, $meta['cache'], $id);
-					}
-					
-					try{ $res = new $meta['object']($id); }
-					catch(Exception $e){
-						if($e->getModule() === 30 && ($e->getCode() === 15 || $e->getCode() === 17)) return self::error(self::HTTP_NOT_FOUND, 'object not found', null, $id);
-						throw $e;
-					}
-					$data = $res->get();
-					
-					foreach($data as $column => $value){
-						$column_meta = isset($meta['props'][$column]) ? $meta['props'][$column] : [];
-						$column_access = isset($column_meta['read']) ? $column_meta['read'] : self::ACCESS_GRANT;
-						if($access < $column_access) unset($data[$column]);
-					}
-					
-					return self::response(self::HTTP_OK, [$data], $meta['cache'], $id);
-					
-				}
-				
-			}else if($method === 'POST'){
-				$access = $meta['object']::api_access($id, self::$session);
-				if($access <= self::ACCESS_DENY) return self::error(self::HTTP_FORBIDDEN, 'access denied to this object');
-				
-				try{ $res = new $meta['object']($id); }
-				catch(Exception $e){
-					if($e->getModule() === 30 && ($e->getCode() === 15 || $e->getCode() === 17)) return self::error(self::HTTP_NOT_FOUND, 'object not found');
-					throw $e;
-				}
-				
-				foreach($data as $column => $value){
-					$column_meta = isset($meta['props'][$column]) ? $meta['props'][$column] : [];
-					$column_access = isset($column_meta['write']) ? $column_meta['write'] : self::ACCESS_PRIVATE;
-					if($access < $column_access) return self::error(self::HTTP_FORBIDDEN, 'access denied for writing the field \'' . $column . '\'');
-					
-					// TODO check format
-				}
-				
-				$res->set($data);
-				
-				return self::response(self::HTTP_NO_CONTENT);
-			}
+			]);
+
+			if(!($response instanceof APIResponse))
+				throw new APIException(API::HTTP_SERVER_ERROR, "no response from action");
+
+			return $response;
+		} catch(APIException $e){
+			return $e->getResponse();
 		}
-		
-		return self::error(self::HTTP_NOT_IMPLEMENTED, 'unsupported method');
 	}
-	
-	public static function response($status, $body = null, $cache = null, $id = null){
+
+	public static function validate($params, $settings){
+		if(isset($settings['path']) && is_array($settings['path'])){
+			if(count($params['path']) > count($settings['path']))
+				throw new APIException(API::HTTP_NOT_FOUND, "request validation failed: path not found");
+
+			foreach($settings['path'] as $key => $uu)
+					self::filter($params['path'][$key] ?? '', $settings['path'][$key], "path_" . $key);
+		}
+
+		if(isset($settings['query']) && is_array($settings['query']))
+			foreach($settings['query'] as $key => $uu)
+					self::filter($params['query'][$key] ?? '', $settings['query'][$key], "query_" . $key);
+
+		if(isset($settings['data']) && is_array($settings['data']))
+			foreach($settings['data'] as $key => $uu)
+					self::filter($params['data'][$key] ?? '', $settings['data'][$key], "data_" . $key);
+	}
+
+	public static function filter($var, $filter, $ref = ''){
+		$msg = 'request validation failed: ' . ($ref?$ref.' ':'');
+
+		if((!isset($filter['empty']) || !$filter['empty']) && $var === '')
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "mustn't be empty", $ref);
+		else if(isset($filter['empty']) && $filter['empty'] && $var === '') return;
+
+		if(isset($filter['allowhtml']) && $filter['allowhtml'] === false)
+			if(strip_tags($var) != $var) throw new APIException(API::HTTP_BAD_REQUEST, $msg . "doesn't allow html tags", $ref);
+
+		if(isset($filter['type'])){
+			if($filter['type'] === 'alnum' && !ctype_alnum($var))
+				throw new APIException(API::HTTP_BAD_REQUEST, $msg . "has to be alphanumeric", $ref);
+			else if($filter['type'] === 'alpha' && !ctype_alpha($var))
+				throw new APIException(API::HTTP_BAD_REQUEST, $msg . "has to be alphabetic", $ref);
+			else if($filter['type'] === 'digit' && !ctype_digit($var))
+				throw new APIException(API::HTTP_BAD_REQUEST, $msg . "has to consist only of digits", $ref);
+		}
+
+		if(isset($filter['filter']) && !filter_var($var, $filter['filter']))
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "didn't pass filter", $ref);
+		if(isset($filter['regex']) && !preg_match($filter['regex'], $var))
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "didn't pass regex", $ref);
+
+		if(isset($filter['length_min']) && strlen($var)<$filter['length_min'])
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "must be min " . $filter['length_min'] . " chars long", $ref);
+		if(isset($filter['length_max']) && strlen($var)>$filter['length_max'])
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "must be max " . $filter['length_max'] . " chars long", $ref);
+
+		if(isset($filter['min']) && $var<$filter['min'])
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "must be min " . $filter['min'], $ref);
+		if(isset($filter['max']) && $var>$filter['max'])
+			throw new APIException(API::HTTP_BAD_REQUEST, $msg . "must be max " . $filter['max'], $ref);
+	}
+}
+
+class APIResponse {
+	private $status, $body, $cache, $id;
+	public function __construct($status, $body = null, $cache = null, $id = null){
+		$this->status = $status;
+		$this->body = $body;
+		$this->cache = $cache;
+		$this->id = $id;
+	}
+
+	public function array(){
 		$response = [
-			'status' => $status,
-			'body' => $body
+			'status' => $this->status,
+			'body' => $this->body
 		];
-		if(!is_null($id)) $response = ['id' => $id] + $response; // prepend the id
-		if(!is_null($cache)) $response['cache'] = $cache;
-		
+		if(!is_null($this->id)) $response = ['id' => $this->id] + $response; // prepend the id
+		if(!is_null($this->cache)) $response['cache'] = $this->cache;
+
 		return $response;
 	}
-	
-	public static function error($status, $message = '', $code = null, $id = null){
+
+	public function json(){
+		http_response_code($this->status);
+		header('Content-Type: application/json');
+		if(!is_null($this->cache)) header('X-Cache: ' . $this->cache);
+		if(!empty($this->body)) echo json_encode($this->body);
+		exit;
+	}
+
+	public function text(){
+		http_response_code($this->status);
+		header('Content-Type: text/plain');
+		if(!empty($this->body)) echo $this->body;
+		exit;
+	}
+
+	public function custom($type){
+		http_response_code($this->status);
+		header('Content-Type: ' . $type);
+		if(!empty($this->body)) echo $this->body;
+		exit;
+	}
+}
+
+class APIException extends \Exception {
+	private $response;
+
+	public function __construct($status, $message = '', $api_code = 0, $api_entity_id = null, $previous = null){
 		$body = [
 			'message' => $message,
-			'code' => $code
+			'code' => $api_code
 		];
-		
-		return self::response($status, $body, null, $id);
+		$this->response = new APIResponse($status, $body, null, $api_entity_id);
+
+		parent::__construct($message, $status, $previous);
 	}
-	
-	public static function send_json($response){
-		http_response_code($response['status']);
-		header('Content-Type: application/json');
-		if(isset($response['cache'])) header('X-Cache: ' . $response['cache']);
-		if(!empty($response['body'])) echo json_encode($response['body']);
-		exit;
-	}
-	
-	public static function send_text($response){
-		http_response_code($response['status']);
-		header('Content-Type: text/plain');
-		if(!empty($response['body'])) echo $response['body'];
-		exit;
+
+	public function getResponse(){
+		return $this->response;
 	}
 }

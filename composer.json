@@ -1,7 +1,7 @@
 {
   "name": "leongrdic/api",
   "type": "library",
-  "description": "Simple but powerful API framework",
+  "description": "Simple and extensible API module with built-in request validation",
   "keywords": ["api", "backend", "database", "model", "framework"],
   "license": "MIT",
   "authors": [
@@ -11,9 +11,10 @@
     }
   ],
   "require": {
-    "php": ">=5.4.0",
-    "leongrdic/entity": "@dev",
-    "leongrdic/exception": "^1.0.0"
+    "php": ">=7.0"
+  },
+  "suggest": {
+    "leongrdic/api-entity": "A bridge between the API resource and an Entity class"
   },
   "autoload": {
     "psr-4": {
