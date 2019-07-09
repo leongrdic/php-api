@@ -130,21 +130,21 @@ class APIResponse {
 		http_response_code($this->status);
 		header('Content-Type: application/json');
 		if(!is_null($this->cache)) header('X-Cache: ' . $this->cache);
-		if(!empty($this->body)) echo json_encode($this->body);
+		if(!is_null($this->body)) echo json_encode($this->body);
 		exit;
 	}
 
 	public function text(){
 		http_response_code($this->status);
 		header('Content-Type: text/plain');
-		if(!empty($this->body)) echo $this->body;
+		echo $this->body;
 		exit;
 	}
 
 	public function custom($type){
 		http_response_code($this->status);
 		header('Content-Type: ' . $type);
-		if(!empty($this->body)) echo $this->body;
+		echo $this->body;
 		exit;
 	}
 }
